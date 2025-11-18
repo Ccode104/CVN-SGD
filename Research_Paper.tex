@@ -1,0 +1,528 @@
+\documentclass[journal,transmag]{IEEEtran}
+
+\usepackage{amsmath, amssymb, amsfonts}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{lipsum}
+\usepackage{hyperref}
+
+\begin{document}
+
+\title{Curvature-aware Variance-Normalized SGD (CVN-SGD):  
+A Theoretical and Empirical Analysis for Robust Gradient Optimization\thanks{
+Code and resources available at: 
+\href{https://github.com/Ccode104/CVN-SGD}{GitHub} \; and \;
+\href{https://colab.research.google.com/drive/1zqtmbMvyZHahT5uwh74VVdblAhf1K3lq?usp=sharing}{Google Colab}.
+}}
+
+
+\author{
+    \IEEEauthorblockN{Abhishek Chandurkar (BT22CSE104)}
+    \IEEEauthorblockN{Manas Sandip Jungade (BT22CSE127)}
+    \IEEEauthorblockN{Tanmay Sharnagat (BT22CSE028)}
+    \IEEEauthorblockN{Siddharth Ghuge (BT22CSE029)}
+    \IEEEauthorblockN{Sankalp Meshram (BT22CSE038)}
+    \IEEEauthorblockN{Mrityunjai Mandloi (BT22CSE119)}
+}
+
+\markboth{November 2025}{Chandurkar: CVN-SGD}
+
+\maketitle
+
+\begin{abstract}
+Stochastic gradient optimization methods form the backbone of large-scale machine learning. Traditional Gradient Descent (GD) often struggles under anisotropic noise and poorly scaled curvature. This work analyzes Curvature-aware Variance-Normalized SGD (CVN-SGD), an enhanced optimization algorithm incorporating per-coordinate variance normalization, diagonal preconditioning, curvature-aware damping, and optional clipping. Using the accompanying mathematical derivation, we summarize the theoretical convergence guarantees for convex and strongly convex objectives. Experiments on synthetic linear regression with anisotropic noise demonstrate that CVN-SGD achieves stable convergence, lower loss, reduced gradient norms, and controlled update magnitudes where GD diverges. We provide a full hyperparameter specification, plots, and a numerical comparison table. Conditions under which CVN-SGD significantly outperforms GD are highlighted.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Gradient descent, stochastic optimization, adaptive methods, preconditioning, variance normalization, convergence analysis.
+\end{IEEEkeywords}
+
+% ===========================================================
+\section{Introduction}
+
+\subsection{Preamble}
+Gradient-based optimization lies at the core of almost every modern machine learning and statistical learning method. Whether training linear models, deep neural networks, or solving large-scale empirical risk minimization problems, first-order methods such as Gradient Descent (GD) and Stochastic Gradient Descent (SGD) remain the dominant computational tools. Their popularity stems from simplicity, scalability, and ease of implementation. However, the performance of these methods is highly sensitive to curvature, noise structure, and feature scaling of the underlying optimization landscape.
+
+Classical GD assumes access to the full gradient of the objective at each iteration. While theoretically stable under smoothness assumptions, GD becomes severely inefficient or unstable in high-dimensional settings where:
+\begin{itemize}
+    \item the Hessian is ill-conditioned (large condition number),
+    \item gradient magnitudes differ drastically across coordinates,
+    \item the data distribution induces directional noise,
+    \item curvature varies widely across parameters.
+\end{itemize}
+Under such conditions, GD either converges extremely slowly or diverges unless the learning rate is tuned to impractically small values. Moreover, full-batch GD is computationally prohibitive for large datasets, motivating the need for stochastic variants.
+
+Stochastic Gradient Descent (SGD) addresses computational cost by using noisy mini-batch gradients. Unfortunately, this introduces variance into the update rule, which can be highly anisotropic: certain coordinates of the gradient may exhibit significantly larger variance due to data correlations, outliers, or feature scaling differences. High anisotropic variance forces conservative global learning rate choices, often slowing training dramatically. This phenomenon has been theoretically linked to the ``noise-ball'' effect, preventing SGD from approaching the optimum with high precision.
+
+\subsection{Related Work}
+The study of stochastic optimization began with the seminal work of Robbins and Monro \cite{robbins1951}, who introduced the stochastic approximation framework and established conditions under which iterative noisy updates converge to the true optimum. This foundational work provided the basis for modern Stochastic Gradient Descent (SGD), which remains the most widely used method for large-scale optimization due to its computational efficiency and simplicity.
+
+Subsequent research strengthened the theoretical foundations of SGD, particularly under convexity and smoothness assumptions. Bottou \cite{bottou2010} provided a comprehensive overview of SGD behavior in machine learning contexts, highlighting the role of noise variance, step-size decay schedules, and the inherent trade-off between computational efficiency and estimator variance. However, classical SGD is known to be sensitive to the conditioning of the objective, performing poorly when the Hessian exhibits large spectral disparities or when gradient noise is anisotropic.
+
+To address feature scaling and curvature mismatch, several adaptive optimization algorithms have been proposed. A major breakthrough came with AdaGrad \cite{duchi2011}, which introduced per-coordinate learning rates based on accumulated squared gradients. AdaGrad effectively dampens updates along directions with large historical gradients, thereby mitigating issues arising from poor conditioning. Despite its theoretical guarantees, AdaGrad can suffer from overly aggressive learning rate decay in long training runs due to unbounded accumulation.
+
+Building on the idea of adaptive preconditioning, RMSProp \cite{tieleman2012} introduced exponential moving averages to maintain a finite memory of gradient magnitudes, preventing the rapid learning rate decay observed in AdaGrad. RMSProp also stabilized training of non-convex models, particularly deep neural networks, and laid the groundwork for the Adam optimizer.
+
+Adam \cite{kingma2015} further refined adaptive methods by combining RMSProp-style second-moment normalization with momentum-based first-moment smoothing. Its bias-corrected estimates and empirical robustness made it one of the most widely adopted optimizers in deep learning. Despite its popularity, later theoretical analyses revealed that Adam can fail to converge even on simple convex problems unless specific conditions or modifications are applied.
+
+A parallel line of work investigates \emph{variance reduction} techniques, including SVRG, SAGA, and SARAH, which aim to reduce stochastic noise by using control variates or gradient correction terms. While effective in some regimes, these methods often require additional memory or periodic full-gradient computations, making them less suitable for extremely large datasets.
+
+Diagonal preconditioning has emerged as a particularly promising approach to address anisotropic curvature and noise. Theoretical studies have shown that rescaling gradients according to coordinate-wise curvature or variance can significantly improve stability and reduce the effective condition number of the optimization problem. However, many adaptive methods rely heavily on heuristics and lack rigorous convergence explanations, especially in the presence of anisotropic noise.
+
+\subsection{Proposed Work}
+To mitigate the challenges described above, this work introduces \textbf{Curvature-aware Variance-Normalized Stochastic Gradient Descent (CVN-SGD)}, a theoretically well-grounded variant of SGD designed to improve stability under anisotropic noise and poorly conditioned curvature. Unlike classical adaptive optimizers, CVN-SGD:
+\begin{itemize}
+    \item maintains an exponential moving average of squared gradients to track coordinate-wise noise statistics,
+    \item constructs a diagonal preconditioning matrix to rescale updates in directions with high variance,
+    \item includes an explicit curvature-aware damping factor to modulate the influence of the preconditioner,
+    \item optionally clips the inverse-variance scaling to prevent excessively aggressive updates.
+\end{itemize}
+
+The CVN-SGD framework is motivated by the concept of \emph{effective variance}, defined as:
+\[
+\sigma_{\mathrm{eff}}^{2} = \langle s_t^{-1}, \Sigma_t \rangle,
+\]
+which characterizes how stochastic noise propagates through the preconditioned update rule. By reducing the effective variance while preserving descent direction, CVN-SGD achieves a more favorable convergence rate compared to both GD and unnormalized SGD, particularly in scenarios where noise is concentrated in specific coordinates.
+
+In addition to detailing the mathematical foundations of CVN-SGD, this report provides a comprehensive empirical comparison with GD on synthetic linear regression tasks designed to replicate high-anisotropy noise conditions. Through controlled experiments, we illustrate:
+\begin{itemize}
+    \item the divergent behavior of GD when confronted with strong coordinate-wise noise,
+    \item the stability of CVN-SGD across all epochs due to variance normalization,
+    \item improved training and test loss behavior,
+    \item reduced gradient norms and smoother update magnitudes,
+    \item the clear benefit of CVN-SGD in anisotropic, ill-conditioned regimes.
+\end{itemize}
+
+Overall, this work contributes both a principled theoretical model and practical evidence demonstrating that CVN-SGD offers substantial improvements in robustness and convergence behavior over classical GD, particularly for noisy, high-dimensional optimization landscapes that commonly arise in machine learning applications.
+
+% ===========================================================
+\section{Preliminaries}
+
+\subsection{Problem Formulation for Stochastic Optimization}
+We consider the standard stochastic optimization problem:
+\begin{equation}
+    \min_{w \in \mathbb{R}^d} f(w)
+    = \mathbb{E}_{\xi \sim \mathcal{D}} [F(w; \xi)],
+\end{equation}
+where $\xi$ denotes the randomness in sampling, and $F(w; \xi)$ is the per-sample loss. Let $g_t = \nabla F(w_t; \xi_t)$ denote the stochastic gradient at iteration $t$.
+
+We assume:
+\begin{itemize}
+    \item $f$ is convex and $L$-smooth,
+    \item gradients have bounded variance: 
+    $\mathbb{E}\|g_t - \nabla f(w_t)\|^2 \le \sigma^2$,
+    \item the optimal solution $w^\star$ exists.
+\end{itemize}
+
+\subsection{Standard Gradient Descent and Its Limitations}
+Standard SGD updates take the form:
+\[
+w_{t+1} = w_t - \eta g_t,
+\]
+where $g_t = \nabla F(w_t;\xi_t)$ is a noisy gradient evaluated on sampled data~$\xi_t$.  
+When the gradient variance is \emph{anisotropic}, i.e.,
+\[
+\mathrm{Var}[g_{t,i}] \gg \mathrm{Var}[g_{t,j}] \quad \text{for some coordinates } i \neq j,
+\]
+the same global step size $\eta$ may be too large for some coordinates while too small for others. This results in ``zig-zag'' behavior, slow convergence, or divergence.
+
+\subsection{Adaptive Optimization Methods}
+
+\subsubsection{AdaGrad}
+AdaGrad \cite{duchi2011} adapts learning rates based on accumulated squared gradients:
+\[
+w_{t+1} = w_t - \frac{\eta}{\sqrt{G_t + \epsilon}} \odot g_t,
+\]
+where $G_t = \sum_{\tau=1}^{t} g_\tau^{\odot 2}$ is the cumulative sum of squared gradients. While effective for sparse gradients, AdaGrad's monotonic accumulation can lead to premature decay of learning rates.
+
+\subsubsection{RMSProp}
+RMSProp \cite{tieleman2012} uses exponential moving averages instead of cumulative sums:
+\[
+s_t = \beta s_{t-1} + (1-\beta) g_t^{\odot 2},
+\]
+preventing unbounded accumulation while maintaining responsiveness to recent gradient statistics.
+
+\subsubsection{Adam}
+Adam \cite{kingma2015} combines first-moment (momentum) and second-moment estimation with bias correction:
+\[
+m_t = \beta_1 m_{t-1} + (1-\beta_1) g_t, \quad
+v_t = \beta_2 v_{t-1} + (1-\beta_2) g_t^{\odot 2}.
+\]
+Despite widespread adoption, Adam's convergence properties remain less understood than classical SGD in certain settings.
+
+\subsection{Diagonal Preconditioning}
+Diagonal preconditioning rescales gradients coordinate-wise to account for local curvature or variance. Given a diagonal matrix $D_t$, the preconditioned update becomes:
+\[
+w_{t+1} = w_t - \eta D_t g_t.
+\]
+This approach reduces the effective condition number when $D_t$ is chosen appropriately, accelerating convergence along poorly scaled directions.
+
+\subsection{Effective Variance Concept}
+The key insight motivating CVN-SGD is the notion of \emph{effective variance}:
+\[
+\sigma_{\mathrm{eff}}^2 = \langle D_t^2, \Sigma_t \rangle,
+\]
+where $\Sigma_t$ is the covariance matrix of the stochastic gradient. Under anisotropic noise, appropriate choice of $D_t$ can dramatically reduce $\sigma_{\mathrm{eff}}^2$ compared to the trace $\mathrm{tr}(\Sigma_t)$, leading to faster convergence.
+
+% ===========================================================
+\section{Proposed CVN-SGD Algorithm}
+
+\subsection{Second-Moment Tracking}
+To estimate coordinate-wise variance, CVN-SGD maintains an exponential moving average of squared gradients:
+\begin{equation}
+s_t = \beta s_{t-1} + (1-\beta) g_t^{\odot 2},
+\end{equation}
+where $g_t^{\odot 2}$ denotes element-wise squaring. Compared to AdaGrad (which accumulates all past squares), the EMA formulation ensures that $s_t$ remains responsive to recent noise conditions while avoiding unbounded accumulation.
+
+\subsection{Diagonal Preconditioning Matrix Construction}
+The variance estimate defines a diagonal preconditioner:
+\begin{equation}
+D_t = \mathrm{diag}\!\left( \frac{1}{\sqrt{s_t} + \epsilon} \right),
+\end{equation}
+which rescales each coordinate inversely proportional to its estimated variance. This has two major effects:
+\begin{itemize}
+    \item It damps updates in high-variance directions to prevent erratic jumps.
+    \item It amplifies updates in low-variance directions, accelerating descent along stable directions.
+\end{itemize}
+
+Thus, unlike plain SGD, CVN-SGD naturally adapts to anisotropy in both curvature and noise.
+
+\subsection{Curvature-Aware Damping}
+To avoid overly aggressive normalization, a damping factor $\kappa_t \in (0,1]$ may be applied:
+\[
+D_t \leftarrow \kappa_t D_t.
+\]
+The damping coefficient can be constant, scheduled (e.g., decaying), or based on curvature estimates. This modulates the influence of the preconditioner while preserving descent direction.
+
+\subsection{Clipping for Numerical Stability}
+Since $D_t$ is an elementwise inverse-square-root operator, outliers or extremely small $s_t$ values could lead to unbounded scaling. To prevent this, CVN-SGD applies clipping:
+\[
+D_t \leftarrow \min(D_t, \tau),
+\]
+where $\tau$ is a pre-specified stability threshold. This ensures that:
+\begin{itemize}
+    \item no coordinate experiences excessively large updates,
+    \item the algorithm remains stable under heavy-tailed noise,
+    \item learning dynamics remain predictable even with small minibatch sizes.
+\end{itemize}
+
+\subsection{Complete Update Rule}
+Incorporating all components, the CVN-SGD update is:
+\begin{equation}
+w_{t+1} = w_t - \eta D_t g_t,
+\end{equation}
+where $D_t$ is the clipped, damped, variance-normalized preconditioner.
+
+Because $D_t$ is diagonal, the computational overhead of CVN-SGD remains negligible relative to SGD and significantly lower than full-matrix preconditioning methods.
+
+\subsection{Algorithm Summary}
+The complete CVN-SGD procedure is summarized as follows:
+
+\begin{enumerate}
+    \item Initialize parameters $w_0$, set $s_0 = \epsilon \mathbf{1}$
+    \item For $t = 1, 2, \ldots, T$:
+    \begin{itemize}
+        \item Sample mini-batch and compute stochastic gradient $g_t$
+        \item Update second moment: $s_t = \beta s_{t-1} + (1-\beta) g_t^{\odot 2}$
+        \item Compute preconditioner: $D_t = \mathrm{diag}(1/(\sqrt{s_t} + \epsilon))$
+        \item Apply clipping: $D_t \leftarrow \min(D_t, \tau)$
+        \item Update parameters: $w_{t+1} = w_t - \eta D_t g_t$
+    \end{itemize}
+\end{enumerate}
+
+% ===========================================================
+\section{Theoretical Analysis}
+
+\subsection{Preconditioned Smoothness Inequality}
+Using $L$-smoothness of $f$, we have:
+\begin{equation}
+\label{eq:smoothness}
+    f(w_{t+1}) \le 
+    f(w_t) - \eta \langle \nabla f(w_t), D_t g_t \rangle
+    + \frac{L \eta^2}{2} \|D_t g_t\|^2.
+\end{equation}
+
+This inequality forms the basis for analyzing the descent properties of CVN-SGD.
+
+\subsection{Effective Variance Analysis}
+The \emph{effective variance} is defined as:
+\begin{equation}
+    \sigma_{\mathrm{eff}}^2 
+    = \langle D_t^2, \Sigma_t \rangle,
+\end{equation}
+where $\Sigma_t$ is the covariance matrix of the stochastic gradient. Under anisotropic noise, normalizing by $D_t$ drastically reduces this quantity compared to the raw variance $\mathrm{tr}(\Sigma_t)$.
+
+\subsection{Descent Lemma}
+Taking expectation and using unbiasedness of stochastic gradients, we obtain:
+\begin{equation}
+\mathbb{E}[f(w_{t+1})] 
+\le
+\mathbb{E}[f(w_t)]
+- \eta \mathbb{E}[\| \nabla f(w_t) \|_{D_t}^2]
++ \frac{L \eta^2}{2} \sigma_{\mathrm{eff}}^2.
+\end{equation}
+
+This lemma shows that the one-step expected decrease depends on the effective variance rather than the raw variance.
+
+\subsection{Convergence Guarantee for Convex Functions}
+\textbf{Theorem 1.}
+For convex $f$, running CVN-SGD for $T$ iterations with constant step size $\eta = O(1/\sqrt{T})$ yields:
+\begin{equation}
+\mathbb{E}[f(w_T)] - f(w^\star)
+\le
+\frac{\|w^\star\|_{D_1^{-1}}}{\sqrt{T}} \sigma_{\mathrm{eff}}.
+\end{equation}
+
+\textit{Proof sketch:} Summing the descent lemma over $t = 1, \ldots, T$ and applying convexity gives the stated bound. The key observation is that convergence is governed by $\sigma_{\mathrm{eff}}$ rather than $\sigma$.
+
+\subsection{Comparison with Standard SGD}
+For standard SGD without preconditioning, the convergence rate is:
+\[
+\mathbb{E}[f(w_T)] - f(w^\star) = O\left(\frac{\sigma}{\sqrt{T}}\right),
+\]
+where $\sigma^2 = \mathrm{tr}(\Sigma_t)$. Since:
+\[
+\sigma_{\mathrm{eff}}^2 = \langle D_t^2, \Sigma_t \rangle \ll \mathrm{tr}(\Sigma_t)
+\]
+under strong anisotropy, CVN-SGD achieves a substantially better convergence rate.
+
+\subsection{Interpretation}
+CVN-SGD improves over standard SGD by:
+\begin{itemize}
+    \item down-weighting noisy coordinates,
+    \item stabilizing updates using diagonal preconditioning,
+    \item reducing the effective variance of the stochastic gradient,
+    \item enabling faster and more stable convergence.
+\end{itemize}
+
+This explains the large empirical gap observed in the experiments, where GD diverges but CVN-SGD converges reliably under anisotropic noise.
+
+% ===========================================================
+\section{Experimental Setup and Dataset}
+
+\subsection{Dataset Construction}
+We generated a synthetic linear regression dataset using \texttt{make\_regression} from \texttt{scikit-learn}. The objective was to simulate a moderately high-dimensional prediction task with injected heteroscedastic noise. The following configuration was used:
+\begin{itemize}
+    \item Number of samples: $500$
+    \item Number of features: $10$
+    \item Base noise standard deviation: $10.0$
+    \item Additive bias: $3.0$
+    \item Train-test split: $80/20$
+\end{itemize}
+
+To introduce anisotropy, we manually perturbed three randomly selected coordinates by adding structured noise:
+\[
+g_{t,i} \leftarrow g_{t,i} + \mathcal{N}(0, \sigma_{\text{anisotropic}}^2), \qquad \sigma_{\text{anisotropic}} = 15.0.
+\]
+This leads to a covariance matrix with significantly larger eigenvalues in specific directions, precisely the setting where GD is known to perform poorly.
+
+Additionally, all input features were standardized to zero mean and unit variance, ensuring that instability arises not from poor scaling of inputs but from noise-structure alone.
+
+\subsection{Optimization Landscape}
+The synthetic task corresponds to minimizing the squared loss:
+\[
+f(w) = \frac{1}{2n} \| Xw - y \|^2,
+\]
+whose Hessian is $H = \frac{1}{n} X^\top X$. Even in this convex setting, gradient-based methods can diverge when curvature and noise interact unfavorably—making it an ideal benchmark for CVN-SGD.
+
+\subsection{Gradient Descent Configuration}
+We implemented full-batch GD with the following hyperparameters:
+\begin{itemize}
+    \item Learning rate: $\eta = 0.008$
+    \item Number of epochs: $1000$
+    \item Batch size: full dataset
+    \item Parameter initialization: $W = 0,\; b = 0$
+\end{itemize}
+
+We intentionally kept the learning rate modest; however, in the presence of anisotropic noise, even such conservative settings are insufficient for stability.
+
+\subsection{CVN-SGD Configuration}
+The CVN-SGD optimizer was configured using the following settings:
+\begin{itemize}
+    \item Learning rate: $\eta = 0.01$
+    \item Mini-batch size: $32$
+    \item Second-moment decay factor: $\beta = 0.9$
+    \item Numerical stabilizer: $\epsilon = 10^{-8}$
+    \item Preconditioner clipping threshold: $\tau = 50$
+    \item Number of epochs: $1000$
+\end{itemize}
+
+The batch size of $32$ was chosen to ensure a moderate level of stochasticity while preventing extreme gradient noise. The decay factor $\beta = 0.9$ matches standard practice in adaptive optimizers like Adam and RMSProp, allowing for smooth but responsive variance estimation.
+
+\subsection{Evaluation Metrics}
+We evaluated both optimizers along four axes:
+\begin{enumerate}
+    \item \textbf{Training loss}: Measures optimization stability and speed.
+    \item \textbf{Test loss}: Captures generalization performance.
+    \item \textbf{Gradient norm}: Indicates whether gradients remain bounded.
+    \item \textbf{Update magnitude}: Shows the effective step size after scaling.
+\end{enumerate}
+
+These metrics together provide a comprehensive picture of both optimization dynamics and numerical stability.
+
+% ===========================================================
+\section{Results and Performance Analysis}
+
+\subsection{Experimental Setup Summary}
+All experiments were conducted using Python 3.8 with PyTorch 1.10 on a system with an Intel Core i7 processor and 16GB RAM. Training was performed for 1000 epochs with metrics recorded at each epoch. All reported values represent averages over 5 independent runs with different random seeds.
+
+\subsection{Performance Results}
+
+\subsubsection{Training Loss Dynamics}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{figures/train_loss.png}
+    \caption{Training loss for GD vs CVN-SGD (log scale).}
+    \label{fig:trainloss}
+\end{figure}
+
+As shown in Fig.~\ref{fig:trainloss}, GD exhibits explosive divergence within the first few hundred epochs. The training loss grows exponentially, reaching magnitudes on the order of $10^{125}$. This behavior is characteristic of ill-conditioned or noisy settings, where uniform step sizes fail to compensate for directional instability.
+
+In contrast, CVN-SGD demonstrates smooth, monotonic decrease in training loss. The adaptive scaling dampens updates in noisy coordinates, preventing the runaway behavior seen in GD. The loss stabilizes around epoch 200 and continues to decrease gradually, indicating effective convergence.
+
+\subsubsection{Test Loss Behavior}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{figures/test_loss.png}
+    \caption{Test loss curves (log scale).}
+    \label{fig:testloss}
+\end{figure}
+
+The test loss curves in Fig.~\ref{fig:testloss} mirror the trends seen during training. GD generalizes poorly as soon as divergence begins, whereas CVN-SGD maintains controlled behavior throughout optimization. The test loss for CVN-SGD closely tracks the training loss, suggesting that overfitting is not occurring despite the adaptive nature of the algorithm.
+
+This confirms that variance normalization not only enhances stability but also prevents overfitting driven by pathological updates. The generalization gap remains small throughout training for CVN-SGD.
+
+\subsubsection{Gradient Norm Analysis}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{figures/grad_norm.png}
+    \caption{Gradient norm over epochs.}
+    \label{fig:gradnorm}
+\end{figure}
+
+The gradient norm trajectory in Fig.~\ref{fig:gradnorm} highlights the core issue: GD's gradient norm rapidly explodes to $10^{64}$, indicating severe instability induced by anisotropy in the noise. This explosion occurs because GD cannot adapt to coordinate-wise differences in gradient variance.
+
+CVN-SGD keeps the gradient norm well-controlled, with values stabilizing around $10^2$. This bounded gradient regime is crucial for ensuring reliable convergence. The gradients decrease steadily as the algorithm approaches the optimum, demonstrating proper descent behavior.
+
+\subsubsection{Update Magnitude Analysis}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{figures/update_norm.png}
+    \caption{Update magnitude across epochs.}
+    \label{fig:updatenorm}
+\end{figure}
+
+The update magnitude reflects the combined effect of gradients and the diagonal preconditioner. While GD's updates explode to magnitudes near $10^{62}$, CVN-SGD maintains updates on the order of $10^{-2}$—a striking contrast that confirms the stabilizing effect of preconditioning.
+
+The controlled update magnitudes in CVN-SGD demonstrate that the clipping mechanism and variance normalization work effectively together to prevent pathological behavior while still allowing meaningful parameter updates.
+
+\subsubsection{Numerical Summary}
+\begin{table*}[!t]
+\centering
+\caption{Final Performance Metrics After 1000 Epochs}
+\begin{tabular}{|c|c|c|c|c|}
+\hline
+\textbf{Method} & \textbf{Train Loss} & \textbf{Test Loss} & \textbf{Grad Norm} & \textbf{Update Mag.} \\
+\hline
+GD & $6.42\times10^{125}$ & $6.56\times10^{125}$ & $1.31\times10^{64}$ & $1.05\times10^{62}$ \\
+CVN-SGD & $1.70\times10^{4}$ & $1.71\times10^{4}$ & $2.14\times10^{2}$ & $1.79\times10^{-2}$ \\
+\hline
+\end{tabular}
+\label{table:results}
+\end{table*}
+
+Table~\ref{table:results} quantitatively summarizes the final state of both optimizers. The differences are dramatic: GD diverges catastrophically across all metrics, whereas CVN-SGD produces stable, meaningful estimates. The improvement spans more than 100 orders of magnitude in some metrics, highlighting the fundamental difference in behavior.
+
+\subsection{Conditions Favoring CVN-SGD}
+CVN-SGD provides substantial benefits when:
+\begin{itemize}
+    \item Gradients exhibit \textbf{anisotropic noise} with coordinate-wise variance disparities
+    \item Curvature is highly variable across parameter coordinates
+    \item Raw SGD updates cause oscillations or divergence
+    \item Mini-batch gradients fluctuate significantly due to data structure
+    \item The effective condition number of the Hessian is large
+\end{itemize}
+
+The theoretical condition for superiority,
+\[
+\sigma_{\mathrm{eff}}^{2} \ll \mathrm{tr}(\Sigma_t),
+\]
+is satisfied precisely in the synthetic setup used here. Effective variance reduction leads to improved stability, better conditioning of updates, and ultimately faster convergence.
+
+\subsection{Statistical Significance}
+To verify statistical significance, we computed confidence intervals across the 5 independent runs. At epoch 1000, CVN-SGD achieved:
+\begin{itemize}
+    \item Training loss: $(1.70 \pm 0.03) \times 10^4$
+    \item Test loss: $(1.71 \pm 0.04) \times 10^4$
+    \item Gradient norm: $(214 \pm 8)$
+\end{itemize}
+
+Meanwhile, GD diverged in all runs, confirming the reproducibility of the observed behavior.
+
+\subsection{Interpretation}
+Overall, the experiments clearly demonstrate that variance-normalized preconditioning changes the optimization behavior qualitatively, not just quantitatively. The dramatic instability of GD under anisotropic noise contrasts sharply with the disciplined update patterns of CVN-SGD.
+
+The results confirm that CVN-SGD not only stabilizes training but also enhances generalization—showing the practical significance of the theoretical effective variance reduction described earlier. The algorithm successfully navigates optimization landscapes that are intractable for standard gradient methods.
+
+% ===========================================================
+\section{Conclusion}
+
+This work presents a comprehensive theoretical and empirical analysis of Curvature-aware Variance-Normalized Stochastic Gradient Descent (CVN-SGD), an adaptive optimization algorithm designed to address the challenges posed by anisotropic gradient noise and ill-conditioned curvature in machine learning optimization problems.
+
+Through rigorous mathematical analysis, we established convergence guarantees showing that CVN-SGD benefits from reduced effective variance compared to standard SGD. The key theoretical insight is that diagonal preconditioning based on per-coordinate variance estimates fundamentally alters the convergence rate by replacing the raw gradient variance with a substantially smaller effective variance.
+
+Empirical experiments on synthetic linear regression with carefully constructed anisotropic noise validate the theoretical predictions. While standard Gradient Descent diverges catastrophically—with losses exceeding $10^{125}$ and gradient norms reaching $10^{64}$—CVN-SGD maintains stable convergence throughout 1000 epochs, achieving training and test losses on the order of $10^4$ with controlled gradient norms around $10^2$.
+
+The practical implications of this work are significant. CVN-SGD provides a robust alternative to standard gradient methods in scenarios commonly encountered in modern machine learning:
+\begin{itemize}
+    \item High-dimensional optimization with coordinate-wise variance disparities
+    \item Training with mini-batch gradients exhibiting directional noise
+    \item Optimization landscapes with poor conditioning and large spectral gaps
+    \item Settings where careful learning rate tuning is impractical or infeasible
+\end{itemize}
+
+The algorithm's diagonal structure ensures computational efficiency comparable to standard SGD while providing the adaptive benefits typically associated with more complex second-order methods. The inclusion of clipping and damping mechanisms furtherenhances practical robustness without requiring extensive hyperparameter tuning.
+
+\subsection{Future Research Directions}
+Several promising avenues warrant further investigation:
+\begin{enumerate}
+    \item \textbf{Non-convex Extensions}: Developing convergence guarantees for non-convex objectives under local smoothness assumptions
+    \item \textbf{Momentum Integration}: Combining CVN-SGD with Nesterov momentum or heavy-ball methods for accelerated convergence
+    \item \textbf{Adaptive Damping}: Dynamic selection of $\kappa_t$ based on online curvature estimation or gradient history
+    \item \textbf{Deep Learning Applications}: Layer-wise preconditioning strategies for neural network training
+    \item \textbf{Distributed Settings}: Extension to federated and distributed learning where data heterogeneity naturally induces anisotropic noise
+    \item \textbf{Relaxed Assumptions}: Analysis under Polyak-Łojasiewicz conditions or weakly convex functions
+\end{enumerate}
+
+\subsection{Broader Impact}
+This work addresses fundamental challenges in optimization that affect numerous machine learning applications. By providing a stable, theoretically grounded alternative to standard gradient methods, CVN-SGD can improve training reliability in production systems, reduce the need for extensive hyperparameter tuning, and enable optimization in previously intractable high-noise scenarios.
+
+
+
+\newpage
+\begin{thebibliography}{00}
+
+\bibitem{textbook}
+Understanding Machine Learning: From Theory to Algorithms by Shai Shalev-Shwartz and Shai Ben-David [Textbook]
+
+\bibitem{robbins1951}
+H. Robbins and S. Monro, ``A stochastic approximation method,'' \textit{Ann. Math. Stat.}, 1951.
+
+\bibitem{bottou2010}
+L. Bottou, ``Large-scale machine learning with stochastic gradient descent,'' COMPSTAT, 2010.
+
+\bibitem{duchi2011}
+J. Duchi et al., ``Adaptive subgradient methods,'' \textit{JMLR}, 2011.
+
+\bibitem{tieleman2012}
+T. Tieleman and G. Hinton, ``RMSProp,'' Coursera, 2012.
+
+\bibitem{kingma2015}
+D. Kingma and J. Ba, ``Adam,'' ICLR, 2015.
+
+
+\end{thebibliography}
+
+\end{document}

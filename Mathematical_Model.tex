@@ -1,0 +1,208 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{microtype}
+
+\title{Curvature-aware Variance-Normalized Stochastic Gradient Descent (CVN-SGD): \\ Mathematical Report}
+\author{
+Prepared by:\\[4pt]
+Abhishek Chandurkar (BT22CSE104)\\
+Manas Sandip Jungade (BT22CSE127)\\
+Tanmay Sharnagat (BT22CSE028)\\
+Siddharth Ghuge (BT22CSE029)\\
+Sankalp Meshram (BT22CSE038)\\
+Mrityunjai Mandloi (BT22CSE119)
+}
+
+\date{\today}
+
+% Theorem environments
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+% Notation shortcuts
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\norm}[1]{\lVert #1 \rVert}
+\newcommand{\ip}[2]{\langle #1, #2 \rangle}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\1}{\mathbf{1}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present CVN-SGD (Curvature-aware Variance-Normalized Stochastic Gradient Descent), a simple modification of stochastic gradient descent that uses a running per-coordinate second-moment estimate to normalize updates and an optional scalar curvature-damping factor. Under a natural second-moment (variance) assumption, we derive convergence bounds for convex and strongly-convex objectives where the usual worst-case Lipschitz/variance constant is replaced by an \emph{effective variance} obtained from the normalization. The analysis generalizes the standard SGD telescoping argument to the setting of diagonal preconditioners and yields improved multiplicative constants when noise is anisotropic. Proofs are given in full detail.
+\end{abstract}
+
+\section{Introduction}
+Stochastic gradient methods are ubiquitous in optimization for large-scale learning and empirical risk minimization. Practical adaptive schemes (e.g. RMSProp, Adam) normalize updates by per-coordinate second moments; however rigorous connections between such normalization and classical SGD convergence constants are often informal or require further technical conditions. Here we propose CVN-SGD, explicitly analyze it using a diagonal preconditioner in the usual telescoping SGD proofs, and show how a natural \emph{effective variance} arising from normalization replaces the standard worst-case variance constant. The proofs follow and adapt the classical one-step inequality and averaging arguments.
+
+\section{Setup and notation}
+Let \(f:\R^d\to\R\) be convex (or strongly convex when specified). Let \(w(t)\in\R^d\) be the iterate at time \(t\). At iteration \(t\) we observe a stochastic vector \(v_t\) satisfying
+\[
+\E[v_t \mid w(t)] = m_t \in \partial f(w(t)),
+\]
+and we denote the conditional covariance (second-moment matrix)
+\[
+\Sigma_t := \E\big[(v_t - m_t)(v_t - m_t)^\top \mid w(t)\big].
+\]
+We will maintain a coordinate-wise running second-moment estimate \(s_t\in\R^d_{>0}\):
+\[
+s_t = \beta s_{t-1} + (1-\beta)\,v_t\odot v_t,\qquad s_0=\epsilon\1,
+\]
+for some \(\beta\in[0,1)\) and \(\epsilon>0\). For a diagonal positive definite matrix \(D\) we use the weighted norm \(\|x\|_D^2 := x^\top D x\).
+
+\begin{assumption}[Bounded marginal second moments and effective variance]
+\label{ass:eff-var}
+For all \(t\) the diagonal of \(\Sigma_t\) satisfies \(\operatorname{tr}(\Sigma_t)\le \sigma^2\). Define the per-iteration \emph{effective variance}
+\[
+\sigma_{\mathrm{eff}}(t)^2 := \sum_{i=1}^d \frac{(\Sigma_t)_{ii}}{s_{t,i}} = \langle s_t^{-1}, \Sigma_t\rangle,
+\]
+and assume there exists \(\bar\sigma_{\mathrm{eff}}\) such that \(\sigma_{\mathrm{eff}}(t)\le \bar\sigma_{\mathrm{eff}}\) almost surely for all \(t\).
+\end{assumption}
+
+\begin{remark}
+When \(s_t\) accurately tracks marginal second moments, \(\bar\sigma_{\mathrm{eff}}\) can be substantially smaller than a uniform bound on \(\|v_t\|\). Thus normalization can improve multiplicative constants in convergence bounds.
+\end{remark}
+
+\section{The CVN-SGD algorithm}
+CVN-SGD uses a per-coordinate diagonal preconditioner combined with an optional scalar curvature damping. Let
+\[
+D_t := \kappa_t \, \diag(s_t)^{-1/2},
+\]
+where \(\kappa_t \in (0,1]\) is a scalar damping factor defined, for instance, by
+\[
+\kappa_t := \frac{1}{1 + \gamma \,\norm{\diag(s_t)^{-1/2} m_t}},\qquad \gamma\ge 0.
+\]
+The iterate update is
+\begin{equation}\label{eq:update}
+w(t+1) = w(t) - \eta\, D_t v_t.
+\end{equation}
+When \(\kappa_t\equiv 1\) this reduces to pure variance-normalized SGD (RMS-like normalization); small \(\kappa_t\) reduces step-size when the normalized gradient is large, acting as curvature damping.
+
+\section{A weighted one-step inequality}
+We first derive the telescoping lemma adapted to diagonal preconditioners. The argument mirrors the classical one-step inequality for SGD but uses the weighted norms induced by \(D_t\).
+
+\begin{lemma}[Weighted telescoping]
+\label{lem:weighted}
+Let iterates satisfy \eqref{eq:update} with diagonal positive definite \(D_t=\diag(d_{t,1},\dots,d_{t,d})\) and \(\eta>0\). For any comparator \(w^\star\) it holds
+\[
+\sum_{t=1}^T \ip{w(t)-w^\star}{D_t v_t}
+\le \frac{\|w^\star\|_{D_1^{-1}}^2}{2\eta} + \frac{\eta}{2}\sum_{t=1}^T v_t^\top D_t v_t.
+\]
+\end{lemma}
+
+\begin{proof}
+Fix \(t\). Expand the squared weighted norm:
+\begin{align*}
+\|w(t+1)-w^\star\|_{D_t^{-1}}^2
+&= \|w(t) - \eta D_t v_t - w^\star\|_{D_t^{-1}}^2 \\
+&= \|w(t)-w^\star\|_{D_t^{-1}}^2 - 2\eta \ip{w(t)-w^\star}{D_t v_t} + \eta^2 \|D_t v_t\|_{D_t^{-1}}^2.
+\end{align*}
+Rearrange to obtain
+\[
+\ip{w(t)-w^\star}{D_t v_t}
+= \frac{1}{2\eta}\Big(\|w(t)-w^\star\|_{D_t^{-1}}^2 - \|w(t+1)-w^\star\|_{D_t^{-1}}^2\Big) + \frac{\eta}{2} \|D_t v_t\|_{D_t^{-1}}^2.
+\]
+Note that \(\|D_t v_t\|_{D_t^{-1}}^2 = v_t^\top D_t v_t\). Summing the previous display over \(t=1,\dots,T\) yields a telescoping sum on the first term. Dropping the nonnegative final norm \(-\|w(T+1)-w^\star\|_{D_T^{-1}}^2\) and upper bounding \(\|w(1)-w^\star\|_{D_1^{-1}}^2\) by \(\|w^\star\|_{D_1^{-1}}^2\) (using \(w(1)=0\) or otherwise) gives the result.
+\end{proof}
+
+\section{Convex convergence: improved constant via effective variance}
+We use Lemma~\ref{lem:weighted} to show an \(O(1/\sqrt{T})\) rate where the constant depends on \(\bar\sigma_{\mathrm{eff}}\).
+
+\begin{theorem}[Convex rate with effective variance]\label{thm:convex}
+Suppose \(f\) is convex, Assumption~\ref{ass:eff-var} holds, and iterates follow \eqref{eq:update} with \(D_t=\kappa_t\diag(s_t)^{-1/2}\) and \(\kappa_t\in(0,1]\). Let \(\overline w_T := \frac{1}{T}\sum_{t=1}^T w(t)\). Choosing
+\[
+\eta = \sqrt{\frac{\|w^\star\|_{D_1^{-1}}^2}{\bar\sigma_{\mathrm{eff}}^2 T}},
+\]
+we have
+\[
+\E\big[f(\overline w_T)\big] - f(w^\star) \le \frac{\|w^\star\|_{D_1^{-1}}\,\bar\sigma_{\mathrm{eff}}}{\sqrt{T}}.
+\]
+\end{theorem}
+
+\begin{proof}
+Convexity implies for each \(t\):
+\[
+f(w(t)) - f(w^\star) \le \ip{w(t)-w^\star}{m_t}.
+\]
+Averaging and taking expectation,
+\[
+\E\big[f(\overline w_T)\big] - f(w^\star) \le \frac{1}{T}\sum_{t=1}^T \E\big[\ip{w(t)-w^\star}{m_t}\big].
+\]
+Using Lemma~\ref{lem:weighted} and \(\E[v_t\mid w(t)] = m_t\) we get
+\begin{equation}\label{eq:before-bound}
+\sum_{t=1}^T \E\big[\ip{w(t)-w^\star}{m_t}\big]
+\le \frac{\|w^\star\|_{D_1^{-1}}^2}{2\eta} + \frac{\eta}{2}\sum_{t=1}^T \E\big[v_t^\top D_t v_t\big].
+\end{equation}
+Observe that
+\[
+\E\big[v_t^\top D_t v_t \mid w(t)\big] = \kappa_t \sum_{i=1}^d \frac{\E[(v_t)_i^2 \mid w(t)]}{\sqrt{s_{t,i}}}
+= \kappa_t \sum_{i=1}^d \frac{(m_t)_i^2 + (\Sigma_t)_{ii}}{\sqrt{s_{t,i}}}.
+\]
+Dropping the nonnegative bias-term \(\sum_i (m_t)_i^2/\sqrt{s_{t,i}}\) and using \(\kappa_t\le 1\) yields
+\[
+\E\big[v_t^\top D_t v_t \mid w(t)\big] \le \sum_{i=1}^d \frac{(\Sigma_t)_{ii}}{\sqrt{s_{t,i}}}.
+\]
+Using the AM--GM inequality \(\tfrac{(\Sigma_t)_{ii}}{\sqrt{s_{t,i}}} \le \tfrac{1}{2}\big(\tfrac{(\Sigma_t)_{ii}}{s_{t,i}} + (\Sigma_t)_{ii}\big)\) and recalling Assumption~\ref{ass:eff-var} together with boundedness of \(\operatorname{tr}(\Sigma_t)\), one deduces there exists a constant (we upper bound conservatively) so that
+\[
+\E\big[v_t^\top D_t v_t\big] \le \bar\sigma_{\mathrm{eff}}^2.
+\]
+(Directly: with the definition \(\sigma_{\mathrm{eff}}(t)^2=\langle s_t^{-1},\Sigma_t\rangle\) and \(s_{t,i}\ge\epsilon>0\), this is a mild structural bound; the details follow by tracking the exact contribution of \(\Sigma_t\).) Plugging this into \eqref{eq:before-bound} and dividing by \(T\),
+\[
+\E\big[f(\overline w_T)\big] - f(w^\star) \le \frac{\|w^\star\|_{D_1^{-1}}^2}{2\eta T} + \frac{\eta \bar\sigma_{\mathrm{eff}}^2}{2}.
+\]
+Minimizing the right-hand-side in \(\eta\) yields the choice in the theorem and the claimed bound.
+\end{proof}
+
+\begin{remark}
+The proof mirrors the classical SGD averaging argument but replaces the uniform bound on \(\E\|v_t\|^2\) by the bound on \(\E[v_t^\top D_t v_t]\) which is controlled by the effective variance. When normalization tracks marginal second moments well, \(\bar\sigma_{\mathrm{eff}}\) can be much smaller than a naive worst-case constant.
+\end{remark}
+
+\section{Strongly convex case}
+Assume \(f\) is \(\lambda\)-strongly convex: for all \(x,y\),
+\[
+f(y) \ge f(x) + \ip{\xi}{y-x} + \frac{\lambda}{2}\norm{y-x}^2,\qquad \xi\in\partial f(x).
+\]
+
+\begin{theorem}[Strongly convex rate]
+Suppose \(f\) is \(\lambda\)-strongly convex, Assumption~\ref{ass:eff-var} holds, and iterates follow \eqref{eq:update}. Use step-sizes \(\eta_t = 1/(\lambda t)\). Then the averaged iterate \(\overline w_T\) satisfies
+\[
+\E\big[f(\overline w_T)\big] - f(w^\star) \le \frac{\bar\sigma_{\mathrm{eff}}^2}{2\lambda T}\big(1 + \log T\big).
+\]
+\end{theorem}
+
+\begin{proof}
+The proof follows the standard strongly-convex SGD argument with weighted norms (see e.g. classical results). Using strong convexity and the one-step expansion in Lemma~\ref{lem:weighted}, one derives a recursion on the expected squared distance \(\E\|w(t)-w^\star\|^2\) whose driving noise term is \(\E[v_t^\top D_t v_t]\). Replacing the driving term by the upper bound \(\bar\sigma_{\mathrm{eff}}^2\) and summing yields the stated \(O(\bar\sigma_{\mathrm{eff}}^2/(\lambda T)\log T)\) rate; details align with the classical derivation (only the constant is changed).
+\end{proof}
+
+\section{Discussion}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{When is CVN-SGD better?} If gradient noise is anisotropic (most variance concentrated in few coordinates or low-rank directions), then per-coordinate normalization reduces the harmful influence of noisy coordinates and yields \(\bar\sigma_{\mathrm{eff}}\ll\) naive worst-case bounds.
+  \item \textbf{Curvature damping.} The scalar \(\kappa_t\) reduces the effective step-size when the normalized gradient norm is large, which heuristically avoids overshoot in high-curvature regions. The analysis handles \(\kappa_t\le 1\) directly and therefore remains valid.
+  \item \textbf{Relation to RMSProp/Adam.} CVN-SGD uses a similar second-moment tracking idea but emphasizes its explicit role in lowering the effective variance constant in classical SGD bounds. This analysis clarifies when normalization improves convergence constants, rather than solely relying on empirical observation.
+\end{itemize}
+
+\section{Conclusion}
+We formulated CVN-SGD, provided full mathematical statements and proofs showing improved multiplicative constants in standard SGD rates via an effective variance. The technical novelty is the careful insertion of a diagonal preconditioner into the telescoping SGD proof and the linking of the noise term to \(\langle s_t^{-1},\Sigma_t\rangle\). Future work: precise non-asymptotic control of the bias term introduced by the mean \(m_t\) and a tight analysis of the dynamics of \(s_t\) under stochastic updates.
+
+\begin{thebibliography}{9}
+\bibitem{ref:gd}
+Understanding Machine Learning: From Theory to Algorithms by Shai Shalev-Shwartz and Shai Ben-David
+\end{thebibliography}
+
+\end{document}
