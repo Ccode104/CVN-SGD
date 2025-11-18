@@ -33,19 +33,7 @@ The implementation and all comparison graphs can be found here:
 
 ---
 
-## 👥 Team Contributions (Short)
 
-All members collaborated on research, coding, experiments, and writing.  
-Approximate roles:
-
-- **Abhishek** – Literature survey, theory  
-- **Manas** – Baseline GD implementation  
-- **Tanmay** – CVN-SGD implementation  
-- **Siddharth** – Mathematical formulation  
-- **Sankalp** – Experiments & plots  
-- **Mrityunjai** – Mathematical formulation 
-
----
 
 ## 🛠 Tools Used
 
