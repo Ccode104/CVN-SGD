@@ -21,7 +21,7 @@ Our work focuses on analyzing existing optimization techniques and proposing **C
 The implementation and all comparison graphs can be found here:
 
 👉 **CVN-SGD Colab Notebook**  
-*(Add your link here)*
+*([CVN_SGD.ipynb](https://github.com/Ccode104/CVN-SGD/blob/main/CVN_SGD.ipynb))*
 
 ---
 
